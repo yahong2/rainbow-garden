@@ -26,6 +26,7 @@ import {
   Gift,
   Globe,
   Info,
+  Lock,
   Send,
   Share2,
   ShieldAlert,
@@ -68,6 +69,15 @@ const appId =
 // --- Constants ---
 const MAX_BALLOONS = 49;
 const MAX_FREE_PHOTOS = 3;
+
+const withTimeout = (promise, ms) => {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("timeout")), ms)
+    ),
+  ]);
+};
 
 // --- Animation Styles ---
 const styleTag = `
@@ -265,6 +275,8 @@ export default function App() {
   const [activeModal, setActiveModal] = useState(null);
   const [newMemo, setNewMemo] = useState("");
   const [memoPhoto, setMemoPhoto] = useState(null);
+  const [memoPrivacy, setMemoPrivacy] = useState("public");
+  const [isSavingMemo, setIsSavingMemo] = useState(false);
   const [libraryTab, setLibraryTab] = useState("all");
   const [storyPage, setStoryPage] = useState(0);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -342,6 +354,7 @@ export default function App() {
   };
 
   const handleAddMemo = async () => {
+    if (isSavingMemo) return;
     if (!newMemo.trim()) return;
     if (!DESIGN_MODE && (!user || !db)) return;
     const today = new Date().toLocaleDateString();
@@ -349,30 +362,48 @@ export default function App() {
       alert("오늘은 이미 풍선을 보냈어요. 내일 다시 만나요.");
       return;
     }
+    setIsSavingMemo(true);
     const memo = {
       id: Date.now(),
       text: newMemo,
       date: today,
-      isPublic: true,
+      isPublic: memoPrivacy === "public",
       photoUrl: memoPhoto,
     };
 
-    if (DESIGN_MODE) {
-      setData((prev) => ({
-        ...prev,
-        memos: [...(prev.memos || []), memo],
-        balloons: (prev.balloons || 0) + 1,
-      }));
-    } else {
-      await updateDoc(doc(db, "artifacts", appId, "users", user.uid), {
-        memos: arrayUnion(memo),
-        balloons: (data.balloons || 0) + 1,
-      });
-    }
+    try {
+      if (DESIGN_MODE) {
+        setData((prev) => ({
+          ...prev,
+          memos: [...(prev.memos || []), memo],
+          balloons: (prev.balloons || 0) + 1,
+        }));
+      } else {
+        await withTimeout(
+          updateDoc(doc(db, "artifacts", appId, "users", user.uid), {
+            memos: arrayUnion(memo),
+            balloons: (data.balloons || 0) + 1,
+          }),
+          15000
+        );
 
-    setNewMemo("");
-    setMemoPhoto(null);
-    setActiveModal(null);
+        // Snapshot이 느리거나 실패하더라도 UX가 바로 반영되도록 로컬도 갱신
+        setData((prev) => ({
+          ...prev,
+          memos: [...(prev.memos || []), memo],
+          balloons: (prev.balloons || 0) + 1,
+        }));
+      }
+
+      setNewMemo("");
+      setMemoPhoto(null);
+      setMemoPrivacy("public");
+      setActiveModal(null);
+    } catch {
+      alert("오류가 발생했습니다. 파이어베이스 설정을 확인해 주세요.");
+    } finally {
+      setIsSavingMemo(false);
+    }
   };
 
   const handleShare = async () => {
@@ -780,6 +811,12 @@ export default function App() {
           setSleepMinutes={setSleepMinutes}
           handlePlayPause={handlePlayPause}
           setActiveModal={setActiveModal}
+          openLibrary={() => {
+            setLibraryTab("all");
+            setActiveModal("library");
+          }}
+          openMemo={() => setActiveModal("memo")}
+          openStore={() => setActiveModal("store")}
         />
       )}
 
@@ -927,6 +964,36 @@ export default function App() {
               </div>
             </div>
 
+            <div className="mb-6 text-left">
+              <p className="text-[11px] font-black text-slate-400 uppercase tracking-tighter mb-2">
+                공개 설정
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMemoPrivacy("public")}
+                  className={`py-3 rounded-2xl border-2 font-black text-[11px] flex items-center justify-center gap-2 transition-all ${
+                    memoPrivacy === "public"
+                      ? "bg-indigo-500 text-white border-indigo-500 shadow-sm"
+                      : "bg-slate-50 text-slate-400 border-slate-100"
+                  }`}
+                >
+                  <Unlock size={14} /> 모두 공개
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMemoPrivacy("private")}
+                  className={`py-3 rounded-2xl border-2 font-black text-[11px] flex items-center justify-center gap-2 transition-all ${
+                    memoPrivacy === "private"
+                      ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                      : "bg-slate-50 text-slate-400 border-slate-100"
+                  }`}
+                >
+                  <Lock size={14} /> 나만 보기
+                </button>
+              </div>
+            </div>
+
             <div className="flex items-center gap-2 mb-8 text-[10px] text-slate-400 font-bold bg-slate-50 p-3 rounded-2xl border border-slate-100">
               <Info size={12} className="text-slate-300" />
               이 치유의 여정은 49일 동안 이어집니다
@@ -934,9 +1001,10 @@ export default function App() {
 
             <button
               onClick={handleAddMemo}
-              className="w-full bg-indigo-500 text-white py-5 rounded-[28px] font-black shadow-lg shadow-indigo-100 active:scale-95 transition-all flex items-center justify-center gap-3"
+              disabled={isSavingMemo || !newMemo.trim()}
+              className="w-full bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white py-5 rounded-[28px] font-black shadow-lg shadow-indigo-100 active:scale-95 transition-all flex items-center justify-center gap-3"
             >
-              <Send size={20} /> 하늘로 풍선 보내기
+              <Send size={20} /> {isSavingMemo ? "전송 중..." : "하늘로 풍선 보내기"}
             </button>
           </div>
         </div>
@@ -1023,6 +1091,9 @@ const SleepPlayerModal = ({
   setSleepMinutes,
   handlePlayPause,
   setActiveModal,
+  openLibrary,
+  openMemo,
+  openStore,
 }) => {
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -1129,23 +1200,43 @@ const SleepPlayerModal = ({
         </div>
 
         <div className="h-24 border-t border-white/5 bg-slate-950/50 backdrop-blur-md flex items-center justify-around px-8 pb-4">
-          <div className="flex flex-col items-center opacity-30">
+          <button
+            type="button"
+            onClick={openLibrary}
+            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
+            aria-label="archive"
+          >
             <Book size={24} />
             <span className="text-[9px] font-black mt-1 uppercase">ARCHIVE</span>
-          </div>
-          <div className="flex flex-col items-center text-indigo-400">
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveModal("sleep")}
+            className="flex flex-col items-center text-indigo-400"
+            aria-label="sleep"
+          >
             <Sparkles size={24} />
             <span className="text-[9px] font-black mt-1 uppercase">SLEEP</span>
             <div className="w-4 h-1 bg-indigo-400 rounded-full mt-1" />
-          </div>
-          <div className="flex flex-col items-center opacity-30">
+          </button>
+          <button
+            type="button"
+            onClick={openMemo}
+            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
+            aria-label="send"
+          >
             <Send size={24} />
             <span className="text-[9px] font-black mt-1 uppercase">Send</span>
-          </div>
-          <div className="flex flex-col items-center opacity-30">
+          </button>
+          <button
+            type="button"
+            onClick={openStore}
+            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
+            aria-label="shop"
+          >
             <Gift size={24} />
             <span className="text-[9px] font-black mt-1 uppercase">SHOP</span>
-          </div>
+          </button>
         </div>
       </div>
     </div>
