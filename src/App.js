@@ -1,4 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   deleteUser,
@@ -18,6 +24,8 @@ import {
   updateDoc,
 } from "firebase/firestore";
 import html2canvas from "html2canvas";
+import "./App.css";
+import SendButton from "./components/SendButton";
 import {
   Book,
   Camera,
@@ -94,6 +102,10 @@ const styleTag = `
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes balloonPop { 0% { transform: scale(0.8); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes riseFromBelow {
+  from { transform: translateY(88px); opacity: 0.85; }
+  to { transform: translateY(0); opacity: 1; }
+}
 
 .animate-float { animation: float 3s ease-in-out infinite; }
 .animate-aura-pulse { animation: auraPulse 4s ease-in-out infinite; }
@@ -101,6 +113,7 @@ const styleTag = `
 .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
 .animate-slide-up { animation: slideUp 0.5s ease-out forwards; }
 .animate-balloon-pop { animation: balloonPop 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+.animate-rise-first { animation: riseFromBelow 2.2s cubic-bezier(0.22, 1, 0.36, 1) forwards; }
 `;
 
 const defaultData = {
@@ -111,12 +124,13 @@ const defaultData = {
   isGreetingShown: false,
 };
 
+/** 디자인 모드: 온보딩(설정→첫메시지) 테스트용 기본값 */
 const designModeData = {
-  catConfig: { name: "삼색이", color: "#E67E22", pattern: "calico", whiteMixed: false },
-  balloons: 5,
-  memos: [{ id: 1, text: "집사야 반가워!", date: "2026-03-25", isPublic: true }],
-  isSetupComplete: true,
-  isGreetingShown: true,
+  catConfig: { name: "", color: "#E67E22", pattern: "solid", whiteMixed: false },
+  balloons: 0,
+  memos: [],
+  isSetupComplete: false,
+  isGreetingShown: false,
 };
 
 // --- Components ---
@@ -158,6 +172,8 @@ const PixelCat = ({
   size = 100,
   isFloating = true,
   interactionMode = "none",
+  fill = false,
+  className = "",
 }) => {
   const { color, pattern, whiteMixed } = config;
   let animationClass = isFloating ? "animate-float" : "";
@@ -165,8 +181,8 @@ const PixelCat = ({
 
   return (
     <div
-      className={`${animationClass} transition-all duration-300 origin-center relative`}
-      style={{ width: size, height: size }}
+      className={`${animationClass} transition-all duration-300 origin-center relative ${className}`}
+      style={fill ? { width: "100%", height: "100%" } : { width: size, height: size }}
     >
       <svg
         width="100%"
@@ -236,18 +252,26 @@ const PixelCat = ({
   );
 };
 
-const Balloon = ({ index }) => {
-  const colors = [
-    "#FF8E8E",
-    "#FFB570",
-    "#FFF47D",
-    "#91FF8E",
-    "#7DFFFF",
-    "#7D9BFF",
-    "#B07DFF",
-    "#FF7DED",
-  ];
-  const color = colors[index % colors.length];
+const BALLOON_COLORS = [
+  "#FF8E8E",
+  "#FFB570",
+  "#FFF47D",
+  "#91FF8E",
+  "#7DFFFF",
+  "#7D9BFF",
+  "#B07DFF",
+  "#FF7DED",
+];
+
+const randomRainbowBalloonColor = () =>
+  BALLOON_COLORS[Math.floor(Math.random() * BALLOON_COLORS.length)];
+
+/** 메모 1개 = 풍선 1개; color는 전송 시 무지개 팔레트에서 랜덤 저장 */
+const Balloon = ({ index, color }) => {
+  const c =
+    color && typeof color === "string"
+      ? color
+      : BALLOON_COLORS[index % BALLOON_COLORS.length];
   const x = (index % 6) * 14 - 35;
   const y = -Math.floor(index / 6) * 18;
   return (
@@ -259,7 +283,7 @@ const Balloon = ({ index }) => {
       <div
         className="w-6 h-7 rounded-full shadow-xl relative"
         style={{
-          backgroundColor: color,
+          backgroundColor: c,
           border: "1.5px solid rgba(255,255,255,0.6)",
         }}
       >
@@ -268,6 +292,45 @@ const Balloon = ({ index }) => {
     </div>
   );
 };
+
+const SPARKLE_X = [-7, -4, -1, 2, 5, 8, -5, 3, -2, 6, -8, 4];
+const SPARKLE_TINTS = [
+  "rgba(255,255,255,0.95)",
+  "rgba(253,224,71,0.9)",
+  "rgba(196,181,253,0.95)",
+  "rgba(251,207,232,0.9)",
+];
+
+/** Send 직후: S자로 상승 + 꼬리 반짝, 종료 후 부모에서 말풍선 처리 */
+const FlyingBalloonWithSparkles = ({ color }) => (
+  <div className="relative flex flex-col items-center">
+    <div className="w-[1px] h-12 bg-white/45 absolute left-1/2 top-5 -translate-x-1/2" />
+    <div
+      className="w-6 h-7 rounded-full shadow-xl relative z-[1]"
+      style={{
+        backgroundColor: color,
+        border: "1.5px solid rgba(255,255,255,0.65)",
+      }}
+    >
+      <div className="w-2 h-2.5 bg-white/45 rounded-full absolute top-1 left-1.5" />
+    </div>
+    <div className="balloon-sparkle-host" aria-hidden>
+      {SPARKLE_X.map((sx, i) => (
+        <span
+          key={i}
+          className="balloon-sparkle-pixel"
+          style={{
+            left: `calc(50% + ${sx}px)`,
+            marginLeft: -1.5,
+            animationDelay: `${i * 0.065}s`,
+            backgroundColor: SPARKLE_TINTS[i % SPARKLE_TINTS.length],
+            boxShadow: `0 0 2px ${SPARKLE_TINTS[i % SPARKLE_TINTS.length]}`,
+          }}
+        />
+      ))}
+    </div>
+  </div>
+);
 
 export default function App() {
   const [user, setUser] = useState(null);
@@ -280,8 +343,10 @@ export default function App() {
   const [isSavingMemo, setIsSavingMemo] = useState(false);
   const [altitudeDelta, setAltitudeDelta] = useState(null);
   const [libraryTab, setLibraryTab] = useState("all");
-  const [storyPage, setStoryPage] = useState(0);
   const [isCapturing, setIsCapturing] = useState(false);
+
+  /** 0: 캐릭터·닉네임 설정 → 1: 첫 메시지 → 2: 답장 연출 → 3: 메인 동산 */
+  const [step, setStep] = useState(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [sleepMinutes, setSleepMinutes] = useState(30);
@@ -292,9 +357,109 @@ export default function App() {
 
   const gardenRef = useRef(null);
   const audioRef = useRef(null);
+  const purrAudioRef = useRef(null);
+  const patAudioRef = useRef(null);
+  const purrDelayTimerRef = useRef(null);
+  const longPressPurrStartedRef = useRef(false);
+  const pressDownAtRef = useRef(0);
+  const lastQuickTapRef = useRef(0);
+  const isPatPatAnimatingRef = useRef(false);
   const sleepTimerRef = useRef(null);
   const fileInputRef = useRef(null);
   const lastBalloonsRef = useRef(data.balloons || 0);
+  const step2TimerRef = useRef(null);
+  /** 0이면 비행 없음; 0이 아니면 해당 토큰으로 비행 중 */
+  const [balloonFlyToken, setBalloonFlyToken] = useState(0);
+  const [meowBubbleVisible, setMeowBubbleVisible] = useState(false);
+  const [isCatPurring, setIsCatPurring] = useState(false);
+  const [isPatPatAnimating, setIsPatPatAnimating] = useState(false);
+  const [catHintDismissed, setCatHintDismissed] = useState(false);
+  const [catHintFading, setCatHintFading] = useState(false);
+  const [catHintIndex, setCatHintIndex] = useState(0);
+  const meowBubbleTimerRef = useRef(null);
+  const balloonFlyEndHandledRef = useRef(false);
+
+  const stopCatPurr = useCallback(() => {
+    setIsCatPurring(false);
+    const el = purrAudioRef.current;
+    if (!el) return;
+    el.pause();
+    el.currentTime = 0;
+  }, []);
+
+  const startCatPurr = useCallback(() => {
+    setIsCatPurring(true);
+    const el = purrAudioRef.current;
+    if (!el) return;
+    el.volume = 0.88;
+    const p = el.play();
+    if (p !== undefined) p.catch(() => {});
+  }, []);
+
+  const triggerPatPat = useCallback(() => {
+    if (isPatPatAnimatingRef.current) return;
+    isPatPatAnimatingRef.current = true;
+    setIsPatPatAnimating(true);
+    const el = patAudioRef.current;
+    if (el) {
+      el.currentTime = 0;
+      el.volume = 0.92;
+      const p = el.play();
+      if (p !== undefined) p.catch(() => {});
+    }
+    window.setTimeout(() => {
+      isPatPatAnimatingRef.current = false;
+      setIsPatPatAnimating(false);
+    }, 1100);
+  }, []);
+
+  const clearPurrDelayTimer = useCallback(() => {
+    if (purrDelayTimerRef.current) {
+      clearTimeout(purrDelayTimerRef.current);
+      purrDelayTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 언마운트 시점 audio 정리
+      const el = purrAudioRef.current;
+      if (el) {
+        el.pause();
+        el.currentTime = 0;
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- 언마운트 시점 pat 오디오 정리
+      const pat = patAudioRef.current;
+      if (pat) {
+        pat.pause();
+        pat.currentTime = 0;
+      }
+      clearPurrDelayTimer();
+    };
+  }, [clearPurrDelayTimer]);
+
+  const handleBalloonFlyEnd = useCallback(() => {
+    setBalloonFlyToken(0);
+    setMeowBubbleVisible(true);
+    if (meowBubbleTimerRef.current) clearTimeout(meowBubbleTimerRef.current);
+    meowBubbleTimerRef.current = setTimeout(() => {
+      setMeowBubbleVisible(false);
+    }, 4200);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (meowBubbleTimerRef.current) clearTimeout(meowBubbleTimerRef.current);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (catHintDismissed) return undefined;
+    const t = window.setInterval(() => {
+      setCatHintIndex((i) => (i + 1) % 2);
+    }, 4500);
+    return () => window.clearInterval(t);
+  }, [catHintDismissed]);
 
   useEffect(() => {
     if (DESIGN_MODE) return;
@@ -330,6 +495,32 @@ export default function App() {
       if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (step === 2) return;
+    if (!data.isSetupComplete) setStep(0);
+    else if ((data.memos || []).length === 0) setStep(1);
+    else setStep(3);
+    // step은 연출(2) 중에는 위 분기를 건너뛰기 위해 의존성에 포함
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- memos 길이로 충분
+  }, [data.isSetupComplete, data.memos?.length, step]);
+
+  useEffect(() => {
+    if (step !== 2) {
+      if (step2TimerRef.current) {
+        clearTimeout(step2TimerRef.current);
+        step2TimerRef.current = null;
+      }
+      return;
+    }
+    step2TimerRef.current = setTimeout(() => {
+      setStep(3);
+      step2TimerRef.current = null;
+    }, 5000);
+    return () => {
+      if (step2TimerRef.current) clearTimeout(step2TimerRef.current);
+    };
+  }, [step]);
 
   useEffect(() => {
     const prev = lastBalloonsRef.current;
@@ -384,6 +575,7 @@ export default function App() {
       date: today,
       isPublic: memoPrivacy === "public",
       photoUrl: memoPhoto,
+      balloonColor: randomRainbowBalloonColor(),
     };
 
     try {
@@ -413,7 +605,14 @@ export default function App() {
       setNewMemo("");
       setMemoPhoto(null);
       setMemoPrivacy("public");
-      setActiveModal("memo");
+      if (step === 1) {
+        setStep(2);
+        setActiveModal(null);
+      } else {
+        setActiveModal(null);
+      }
+      balloonFlyEndHandledRef.current = false;
+      setBalloonFlyToken(Date.now());
     } catch {
       alert("오류가 발생했습니다. 파이어베이스 설정을 확인해 주세요.");
     } finally {
@@ -454,7 +653,8 @@ export default function App() {
     if (!ok) return;
 
     if (DESIGN_MODE) {
-      setData(designModeData);
+      setData({ ...defaultData });
+      setStep(0);
       setActiveModal(null);
       return;
     }
@@ -494,6 +694,12 @@ export default function App() {
     return "from-sky-500 via-blue-300 to-emerald-50";
   }, [data.balloons]);
 
+  /** 1~3일차: 전용 배경 이미지 (public/bg-day1-3.png) */
+  const useDay1to3SkyImage = useMemo(() => {
+    const b = data.balloons || 0;
+    return b >= 1 && b <= 3;
+  }, [data.balloons]);
+
   if (!DESIGN_MODE && !firebaseConfig) {
     return (
       <div className="min-h-screen w-full bg-slate-950 text-white flex items-center justify-center p-8">
@@ -526,8 +732,11 @@ export default function App() {
             </button>
           )}
           <h2 className="text-2xl font-black mb-1 tracking-tighter uppercase">
-            {isFirstTime ? "Garden Entrance" : "Profile Edit"}
+            PROFILE EDIT
           </h2>
+          <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-2">
+            캐릭터 및 닉네임 설정
+          </p>
           <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-8">
             49일간의 치유 여정 시작
           </p>
@@ -633,8 +842,24 @@ export default function App() {
             disabled={!data.catConfig.name || (!DESIGN_MODE && (!user || !db))}
             onClick={async () => {
               const update = { ...data, isSetupComplete: true };
-              setData(update);
-              setActiveModal(isFirstTime ? "story" : null);
+              try {
+                if (!DESIGN_MODE && user && db) {
+                  await setDoc(
+                    doc(db, "artifacts", appId, "users", user.uid),
+                    update,
+                    { merge: true }
+                  );
+                }
+                setData(update);
+                if (isFirstTime) {
+                  setStep(1);
+                } else {
+                  setActiveModal(null);
+                  setStep((s) => (s < 2 ? 2 : s));
+                }
+              } catch {
+                alert("저장에 실패했습니다. 파이어베이스 설정을 확인해 주세요.");
+              }
             }}
             className="w-full bg-indigo-500 disabled:opacity-50 text-white py-5 rounded-[28px] font-black shadow-lg shadow-indigo-100 active:scale-95 transition-all"
           >
@@ -645,96 +870,147 @@ export default function App() {
     );
   }
 
-  if (activeModal === "story") {
-    const storyTexts = [
-      "“집사야 나, 아직 완전히 떠난 건 아니야.”",
-      "“49일 동안은… 너의 곁에 있을게.”",
-      "“나에게 메시지를 보내주면, 풍선을 타고 집사 꿈속으로 찾아갈게.”",
+  const memosList = data.memos || [];
+  const clusterBalloons = balloonFlyToken ? memosList.slice(0, -1) : memosList;
+  const lastMemo = memosList.length > 0 ? memosList[memosList.length - 1] : null;
+  const flyBalloonColor =
+    lastMemo?.balloonColor ||
+    BALLOON_COLORS[
+      Math.max(0, memosList.length - 1) % BALLOON_COLORS.length
     ];
-    return (
-      <div className="flex h-screen w-full bg-slate-950 items-center justify-center p-8 text-white text-center font-sans">
-        <style>{styleTag}</style>
-        <div className="max-w-sm animate-fade-in flex flex-col items-center">
-          <PixelCat config={data.catConfig} size={140} />
-          <p className="text-xl font-bold leading-relaxed my-12 tracking-tight">
-            {storyTexts[storyPage]}
-          </p>
-          <div className="flex gap-2 mb-10">
-            {[0, 1, 2].map((i) => (
-              <div
-                key={i}
-                className={`h-1.5 rounded-full transition-all ${
-                  i === storyPage ? "w-8 bg-indigo-400" : "w-2 bg-white/20"
-                }`}
-              />
-            ))}
-          </div>
-          <button
-            onClick={() =>
-              storyPage < 2 ? setStoryPage(storyPage + 1) : setActiveModal(null)
-            }
-            className="bg-white text-slate-950 px-12 py-4 rounded-full font-black text-sm active:scale-95 transition-all"
-          >
-            다음 이야기
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
-    <div
-      className={`h-screen w-full flex flex-col bg-gradient-to-b ${skyStyle} overflow-hidden font-sans text-white relative`}
-    >
+    <>
+    {step >= 2 && (
+    <div className="tamago-frame flex h-[100svh] max-h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-[#0c0618] text-white">
       <style>{styleTag}</style>
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1.05rem]">
+        <div
+          className={`relative flex min-h-0 flex-1 flex-col overflow-hidden [--header-stack:clamp(4.65rem,10.5vh,5.85rem)] ${
+            useDay1to3SkyImage ? "bg-slate-950" : `bg-gradient-to-b ${skyStyle}`
+          }`}
+        >
+      {useDay1to3SkyImage ? (
+        <>
+          <div
+            aria-hidden
+            className="absolute inset-0 z-0 min-h-full min-w-full bg-no-repeat"
+            style={{
+              backgroundImage: "url(/bg-day1-3.png)",
+              backgroundSize: "cover",
+              backgroundPosition: "bottom center",
+              backgroundRepeat: "no-repeat",
+            }}
+          />
+          <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-black/15 via-transparent to-black/25" />
+        </>
+      ) : (
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-0 z-0 min-h-full w-full bg-gradient-to-b ${skyStyle}`}
+        />
+      )}
       <audio ref={audioRef} src={selectedTrack.src} loop />
+      <audio
+        ref={purrAudioRef}
+        src="/purring-cat.mp3"
+        loop
+        preload="auto"
+        className="hidden"
+        aria-hidden
+      />
+      <audio
+        ref={patAudioRef}
+        src="/cat-pat.mp3"
+        preload="auto"
+        className="hidden"
+        aria-hidden
+      />
 
-      <div ref={gardenRef} className="relative flex-1 select-none">
+      <div
+        ref={gardenRef}
+        className="relative z-[2] flex min-h-0 flex-1 flex-col overflow-hidden select-none"
+      >
         {!isCapturing && (
-          <div className="absolute top-10 left-6 right-6 flex justify-between items-start z-50">
-            <div className="relative">
-              <div className="bg-white/20 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/30 shadow-lg flex items-center gap-2">
-                <Globe size={14} />
-                <span className="text-[13px] font-black uppercase tracking-tight">
-                  {data.catConfig.name}
-                </span>
-                <span className="text-[11px] font-black text-white/70 tracking-tight">
-                  {(data.balloons || 0) * 100}m
-                </span>
-              </div>
-              {altitudeDelta ? (
-                <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-[11px] font-black text-white bg-indigo-500/80 border border-white/20 px-3 py-1.5 rounded-full shadow-lg animate-slide-up">
-                  +{altitudeDelta}m
+          <>
+            <div className="z-50 flex shrink-0 justify-between gap-2 px-3 pt-2.5 sm:px-5 sm:pt-3">
+              <div className="relative flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                <div className="flex min-w-0 max-w-full items-center gap-2 rounded-full border border-white/30 bg-white/20 px-4 py-2.5 shadow-lg backdrop-blur-md">
+                  <Globe size={14} className="shrink-0" />
+                  <span className="truncate text-[13px] font-black uppercase tracking-tight">
+                    {data.catConfig.name}
+                  </span>
+                  <span className="shrink-0 text-[11px] font-black text-white/70">
+                    {(data.balloons || 0) * 100}m
+                  </span>
                 </div>
-              ) : null}
+                {step === 2 ? (
+                  <div className="max-w-[14rem] animate-fade-in rounded-2xl bg-white px-3 py-2 text-left shadow-xl">
+                    <p className="text-[11px] font-black leading-snug text-slate-800">
+                      집사 나 떠오르고있어!
+                    </p>
+                  </div>
+                ) : null}
+                {altitudeDelta ? (
+                  <div className="absolute -bottom-7 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-full border border-white/20 bg-indigo-500/80 px-3 py-1.5 text-[11px] font-black text-white shadow-lg animate-slide-up">
+                    +{altitudeDelta}m
+                  </div>
+                ) : null}
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  onClick={handleShare}
+                  className="rounded-full border border-white/30 bg-white/20 p-3 shadow-lg backdrop-blur-md"
+                  aria-label="share"
+                >
+                  <Share2 size={18} />
+                </button>
+                <button
+                  onClick={handleCapture}
+                  className="rounded-full border border-white/30 bg-white/20 p-3 shadow-lg backdrop-blur-md"
+                  aria-label="capture"
+                >
+                  <Camera size={18} />
+                </button>
+                <button
+                  onClick={() => setActiveModal("account")}
+                  className="rounded-full border border-white/30 bg-white/20 p-3 shadow-lg backdrop-blur-md"
+                  aria-label="account"
+                >
+                  <User size={18} />
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2">
+            <div className="flex shrink-0 justify-center gap-2 px-3 pb-1 pt-0">
               <button
-                onClick={handleShare}
-                className="p-3 bg-white/20 backdrop-blur-md rounded-full shadow-lg border border-white/30"
-                aria-label="share"
+                type="button"
+                onClick={() => setActiveModal("store")}
+                className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-[10px] font-bold text-white/85 backdrop-blur-sm active:scale-95"
               >
-                <Share2 size={18} />
+                간식
               </button>
               <button
-                onClick={handleCapture}
-                className="p-3 bg-white/20 backdrop-blur-md rounded-full shadow-lg border border-white/30"
-                aria-label="capture"
+                type="button"
+                onClick={() => setActiveModal("memo")}
+                className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-[10px] font-bold text-white/85 backdrop-blur-sm active:scale-95"
               >
-                <Camera size={18} />
+                놀이
               </button>
               <button
-                onClick={() => setActiveModal("account")}
-                className="p-3 bg-white/20 backdrop-blur-md rounded-full shadow-lg border border-white/30"
-                aria-label="account"
+                type="button"
+                onClick={() => setActiveModal("sleep")}
+                className="rounded-full border border-white/25 bg-white/10 px-3 py-1 text-[10px] font-bold text-white/85 backdrop-blur-sm active:scale-95"
               >
-                <User size={18} />
+                쓰다듬기
               </button>
             </div>
-          </div>
+          </>
         )}
 
-        <div className="absolute left-6 top-1/4 bottom-1/4 w-1 bg-white/10 rounded-full flex flex-col items-center">
+        <div
+          className="absolute left-4 top-[var(--header-stack)] bottom-[min(24vh,6.25rem)] w-1 rounded-full bg-white/10 sm:left-5 flex flex-col items-center"
+          aria-hidden
+        >
           <div
             className="absolute bottom-0 w-full bg-indigo-400 transition-all duration-1000"
             style={{ height: `${((data.balloons || 0) / MAX_BALLOONS) * 100}%` }}
@@ -749,88 +1025,316 @@ export default function App() {
           </div>
         </div>
 
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-[140px] flex flex-col items-center">
-          <div className="relative mb-8 h-12 flex items-center justify-center text-indigo-200">
-            {(data.memos || []).map((_, i) => (
-              <Balloon key={i} index={i} />
-            ))}
+        <div className="rg-main-stage relative w-full overflow-hidden">
+          <div className="absolute inset-0 flex min-h-0 flex-col items-center justify-center px-2 pb-1 pt-0 sm:px-3">
+          <div className="relative mb-3 flex h-12 w-full max-w-[min(18rem,calc(100vw-2rem))] shrink-0 justify-center">
+            {balloonFlyToken ? (
+              <div
+                key={balloonFlyToken}
+                className="balloon-fly-s absolute left-1/2 top-0 z-[50] -translate-x-1/2"
+                onAnimationEnd={(e) => {
+                  if (e.target !== e.currentTarget) return;
+                  if (balloonFlyEndHandledRef.current) return;
+                  balloonFlyEndHandledRef.current = true;
+                  handleBalloonFlyEnd();
+                }}
+              >
+                <FlyingBalloonWithSparkles color={flyBalloonColor} />
+              </div>
+            ) : null}
+            <div className="relative h-full w-0">
+              {clusterBalloons.map((m, i) => (
+                <Balloon
+                  key={m.id ?? `b-${i}`}
+                  index={i}
+                  color={m.balloonColor}
+                />
+              ))}
+            </div>
           </div>
-          <PixelCat
-            config={data.catConfig}
-            size={120}
-            interactionMode={
-              activeModal === "sleep" && isPlaying ? "sleeping" : "none"
-            }
-          />
-          {(data.balloons || 0) === 0 && (
-            <div className="mt-4 bg-white/10 backdrop-blur-sm px-4 py-2 rounded-2xl text-[11px] font-bold animate-pulse">
+          <div
+            className={`relative z-10 shrink-0 ${
+              step === 2 ? "animate-rise-first" : ""
+            } ${meowBubbleVisible ? "translate-x-1.5" : ""}`}
+            style={{
+              width: "clamp(4.25rem, 26vw, 7.5rem)",
+              height: "clamp(4.25rem, 26vw, 7.5rem)",
+            }}
+          >
+            {meowBubbleVisible && !isCatPurring && !isPatPatAnimating ? (
+              <div
+                className="cat-meow-bubble pointer-events-none absolute -top-[3.35rem] left-1/2 z-20 w-max max-w-[min(14rem,calc(100vw-2rem))]"
+                role="status"
+              >
+                <div className="relative rounded-2xl border border-white/25 bg-white px-3.5 py-2.5 pr-4 text-left shadow-xl">
+                  <p className="text-[13px] font-black leading-tight text-slate-800">
+                    야옹
+                  </p>
+                  <p className="mt-0.5 text-[10px] font-bold text-slate-500">
+                    집사, 잘 받았다냥
+                  </p>
+                  <div
+                    className="absolute -bottom-1.5 left-5 h-3 w-3 rotate-45 border-b border-r border-white/20 bg-white"
+                    aria-hidden
+                  />
+                </div>
+              </div>
+            ) : null}
+            {isCatPurring && !isPatPatAnimating ? (
+              <div
+                className="cat-zzzz-text pointer-events-none absolute -top-9 left-1/2 z-30 -translate-x-1/2 select-none text-lg font-black tracking-[0.2em] text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)] sm:-top-10 sm:text-xl"
+                aria-hidden
+              >
+                Zzzz
+              </div>
+            ) : null}
+            {isPatPatAnimating ? (
+              <div
+                className="cat-pat-text-pop pointer-events-none absolute -top-10 left-1/2 z-35 -translate-x-1/2 select-none text-base font-black tracking-wide text-amber-100 drop-shadow-[0_2px_10px_rgba(0,0,0,0.65)] sm:-top-11 sm:text-lg"
+                role="status"
+              >
+                Pat! Pat!
+              </div>
+            ) : null}
+            {!catHintDismissed ? (
+              <div
+                className={`cat-hint-bubble pointer-events-none absolute -top-2 left-1/2 z-[15] w-[min(13.5rem,calc(100vw-3rem))] -translate-x-1/2 transition-opacity duration-500 ease-out sm:-top-3 ${
+                  catHintFading ? "cat-hint-bubble--dismissed" : ""
+                }`}
+                aria-hidden
+              >
+                <div className="relative rounded-2xl border border-white/20 bg-white/[0.12] px-3.5 py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.12)] backdrop-blur-md">
+                  <div className="relative flex min-h-[2.4rem] w-full items-center justify-center sm:min-h-[2.55rem]">
+                    <p
+                      className={`absolute inset-x-1 text-center text-[10px] font-semibold leading-snug tracking-wide text-white/90 transition-opacity duration-700 ease-in-out sm:text-[11px] ${
+                        catHintIndex === 0 ? "opacity-100" : "opacity-0"
+                      }`}
+                    >
+                      Hold for Purrs
+                    </p>
+                    <p
+                      className={`absolute inset-x-1 text-center text-[10px] font-semibold leading-snug tracking-wide text-white/90 transition-opacity duration-700 ease-in-out sm:text-[11px] ${
+                        catHintIndex === 1 ? "opacity-100" : "opacity-0"
+                      }`}
+                    >
+                      Double tap for Butt-pats
+                    </p>
+                  </div>
+                </div>
+                <div
+                  className="absolute -bottom-0.5 left-1/2 h-2 w-2 -translate-x-1/2 translate-y-px rotate-45 border-b border-r border-white/15 bg-white/[0.1] backdrop-blur-sm"
+                  aria-hidden
+                />
+              </div>
+            ) : null}
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label="고양이 — 빠르게 두 번 탭하면 Pat! 길게 누르면 골골"
+              className={`flex h-full w-full touch-manipulation select-none items-center justify-center ${
+                isCatPurring ? "cat-purr-shake" : ""
+              } cursor-pointer`}
+              style={{ touchAction: "none" }}
+              onPointerDown={(e) => {
+                if (e.pointerType === "mouse" && e.button !== 0) return;
+                if (isPatPatAnimatingRef.current) return;
+                if (!catHintDismissed && !catHintFading) {
+                  setCatHintFading(true);
+                  window.setTimeout(() => setCatHintDismissed(true), 480);
+                }
+                pressDownAtRef.current = Date.now();
+                longPressPurrStartedRef.current = false;
+                clearPurrDelayTimer();
+                purrDelayTimerRef.current = window.setTimeout(() => {
+                  purrDelayTimerRef.current = null;
+                  longPressPurrStartedRef.current = true;
+                  try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  } catch {
+                    // ignore
+                  }
+                  startCatPurr();
+                }, 280);
+              }}
+              onPointerUp={(e) => {
+                clearPurrDelayTimer();
+                try {
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                } catch {
+                  // ignore
+                }
+                if (longPressPurrStartedRef.current) {
+                  longPressPurrStartedRef.current = false;
+                  stopCatPurr();
+                  return;
+                }
+                const dur = Date.now() - pressDownAtRef.current;
+                if (dur < 380 && !isPatPatAnimatingRef.current) {
+                  const now = Date.now();
+                  if (
+                    lastQuickTapRef.current &&
+                    now - lastQuickTapRef.current < 420
+                  ) {
+                    lastQuickTapRef.current = 0;
+                    triggerPatPat();
+                  } else {
+                    lastQuickTapRef.current = now;
+                  }
+                }
+              }}
+              onPointerCancel={(e) => {
+                clearPurrDelayTimer();
+                try {
+                  if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                    e.currentTarget.releasePointerCapture(e.pointerId);
+                  }
+                } catch {
+                  // ignore
+                }
+                if (longPressPurrStartedRef.current) {
+                  longPressPurrStartedRef.current = false;
+                  stopCatPurr();
+                }
+              }}
+              onLostPointerCapture={() => {
+                clearPurrDelayTimer();
+                if (longPressPurrStartedRef.current) {
+                  longPressPurrStartedRef.current = false;
+                  stopCatPurr();
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  if (!catHintDismissed && !catHintFading) {
+                    setCatHintFading(true);
+                    window.setTimeout(() => setCatHintDismissed(true), 480);
+                  }
+                  longPressPurrStartedRef.current = true;
+                  startCatPurr();
+                }
+              }}
+              onKeyUp={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  longPressPurrStartedRef.current = false;
+                  stopCatPurr();
+                }
+              }}
+            >
+              <div className="cat-pat-butt-perspective flex h-full w-full items-center justify-center">
+                <div
+                  className={`cat-pat-butt-stage flex h-full w-full items-center justify-center ${
+                    isPatPatAnimating ? "cat-pat-butt-motion" : ""
+                  }`}
+                >
+                <PixelCat
+                  config={data.catConfig}
+                  size={120}
+                  fill
+                  isFloating={!isCatPurring && !isPatPatAnimating}
+                  interactionMode={
+                    isCatPurring
+                      ? "none"
+                      : activeModal === "sleep" && isPlaying
+                        ? "sleeping"
+                        : "none"
+                  }
+                />
+                </div>
+              </div>
+            </div>
+          </div>
+          {(data.balloons || 0) === 0 ? (
+            <div className="mt-3 max-w-[18rem] shrink-0 rounded-2xl bg-white/10 px-4 py-2 text-center text-[11px] font-bold animate-pulse backdrop-blur-sm">
               풍선을 보내면 여정이 시작됩니다
             </div>
-          )}
+          ) : null}
+          </div>
         </div>
-        <div
-          className={`absolute bottom-0 w-full h-32 transition-all duration-[3000ms] ${
-            (data.balloons || 0) > 20 ? "bg-emerald-500" : "bg-slate-900"
-          }`}
-          style={{
-            transform: (data.balloons || 0) > 10 ? "translateY(100%)" : "translateY(0)",
-          }}
-        />
       </div>
 
-      <div className="h-28 bg-[#0a0a1a] border-t border-white/5 flex items-center justify-around px-6 z-[100] pb-4 font-black text-white/30">
+      {activeModal === null ? (
+        <div className="relative z-[90] shrink-0 border-t border-white/10 bg-[#0a0a1a]/90 px-2 pb-2 pt-2 backdrop-blur-md sm:px-3">
+          <SendButton
+            onClick={() => setActiveModal("memo")}
+            variant="dreamy"
+          />
+        </div>
+      ) : null}
+
+      <nav
+        className="z-[100] flex shrink-0 items-center justify-around border-t border-white/5 bg-[#0a0a1a] px-2 py-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 font-black text-white/30 sm:px-4"
+        aria-label="Main"
+      >
         <button
           onClick={() => {
             setLibraryTab("all");
             setActiveModal("library");
           }}
-          className={`flex flex-col items-center transition-colors ${
+          className={`flex min-w-0 flex-col items-center gap-0.5 transition-colors ${
             activeModal === "library" ? "text-indigo-400" : ""
           }`}
         >
-          <Book size={24} />
-          <span className="text-[9px] mt-1 uppercase tracking-widest">
+          <Book size={22} strokeWidth={2} />
+          <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
             Archive
           </span>
         </button>
         <button
           onClick={() => setActiveModal("sleep")}
-          className={`flex flex-col items-center transition-colors ${
+          className={`flex min-w-0 flex-col items-center gap-0.5 transition-colors ${
             activeModal === "sleep" ? "text-indigo-400" : ""
           }`}
         >
-          <Sparkles size={24} />
-          <span className="text-[9px] mt-1 uppercase tracking-widest">Sleep</span>
+          <Sparkles size={22} strokeWidth={2} />
+          <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+            Sleep
+          </span>
         </button>
 
         <button
           onClick={() => setActiveModal("memo")}
-          className={`flex flex-col items-center transition-all ${
+          className={`flex min-w-0 flex-col items-center gap-0.5 transition-all ${
             activeModal === "memo"
-              ? "text-indigo-400 scale-110"
+              ? "scale-105 text-indigo-400"
               : "text-indigo-300"
           }`}
         >
-          <div className="bg-indigo-500 p-3 rounded-full shadow-[0_0_20px_rgba(99,102,241,0.5)] -translate-y-4 border-2 border-white/20 active:scale-90 transition-transform">
-            <Send size={28} className="text-white" />
+          <div
+            className={`rounded-full border-2 border-white/20 bg-indigo-500 p-2 shadow-[0_0_16px_rgba(99,102,241,0.45)] transition-all active:scale-90 sm:p-2.5 ${
+              step === 2
+                ? "shadow-[0_0_28px_rgba(129,140,248,0.9)] ring-2 ring-indigo-300/70 animate-pulse"
+                : ""
+            }`}
+          >
+            <Send size={24} className="text-white sm:h-[26px] sm:w-[26px]" />
           </div>
-          <span className="text-[9px] uppercase tracking-widest -mt-2">
+          <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
             Send
           </span>
         </button>
 
         <button
           onClick={() => setActiveModal("store")}
-          className={`flex flex-col items-center transition-colors ${
+          className={`flex min-w-0 flex-col items-center gap-0.5 transition-colors ${
             activeModal === "store" ? "text-indigo-400" : ""
           }`}
         >
-          <Gift size={24} />
-          <span className="text-[9px] mt-1 uppercase tracking-widest">Shop</span>
+          <Gift size={22} strokeWidth={2} />
+          <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+            Shop
+          </span>
         </button>
+      </nav>
+        </div>
       </div>
+    </div>
+    )}
 
-      {activeModal === "sleep" && (
+      {step >= 2 && activeModal === "sleep" && (
         <SleepPlayerModal
           data={data}
           selectedTrack={selectedTrack}
@@ -848,7 +1352,7 @@ export default function App() {
         />
       )}
 
-      {activeModal === "library" && (
+      {step >= 2 && activeModal === "library" && (
         <div className="fixed inset-0 z-[2000] bg-slate-50 flex flex-col text-slate-800 animate-fade-in font-sans">
           <div className="h-24 flex items-center justify-between px-10 bg-white border-b shadow-sm font-black text-xl uppercase tracking-tighter">
             Memory Archive
@@ -917,18 +1421,33 @@ export default function App() {
         </div>
       )}
 
-      {activeModal === "memo" && (
-        <div className="fixed inset-0 z-[2000] bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in text-slate-800 font-sans">
+      {(step === 1 || (step >= 2 && activeModal === "memo")) && (
+        <div
+          className={`fixed inset-0 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-6 animate-fade-in text-slate-800 font-sans ${
+            step === 1 ? "z-[3000]" : "z-[2000]"
+          }`}
+        >
           <div className="bg-white w-full max-w-sm rounded-[56px] p-10 shadow-2xl">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="font-black text-xl tracking-tight">오늘의 인사</h3>
-              <button
-                onClick={() => setActiveModal(null)}
-                className="text-slate-300 hover:text-slate-500 transition-colors"
-                aria-label="close"
-              >
-                <X />
-              </button>
+              <div>
+                <h3 className="font-black text-xl tracking-tight">오늘의 인사</h3>
+                {step === 1 ? (
+                  <p className="text-[10px] font-black text-indigo-400 uppercase tracking-widest mt-1">
+                    첫 메시지
+                  </p>
+                ) : null}
+              </div>
+              {step !== 1 ? (
+                <button
+                  onClick={() => setActiveModal(null)}
+                  className="text-slate-300 hover:text-slate-500 transition-colors"
+                  aria-label="close"
+                >
+                  <X />
+                </button>
+              ) : (
+                <span className="w-6" aria-hidden />
+              )}
             </div>
             <p className="text-[12px] font-bold text-indigo-500 mb-6 leading-relaxed bg-indigo-50 p-4 rounded-3xl border border-indigo-100 animate-pulse">
               "집사야, 메시지를 보내주면 나는 그 풍선을 타고 집사 꿈속으로 찾아갈게."
@@ -1038,7 +1557,7 @@ export default function App() {
         </div>
       )}
 
-      {activeModal === "store" && (
+      {step >= 2 && activeModal === "store" && (
         <div className="fixed inset-0 z-[2000] bg-white flex flex-col animate-fade-in text-slate-800 font-sans">
           <div className="h-24 flex items-center justify-between px-10 border-b shadow-sm font-black text-xl uppercase tracking-tighter">
             Memorial Shop
@@ -1082,7 +1601,7 @@ export default function App() {
         </div>
       )}
 
-      {activeModal === "account" && (
+      {step >= 2 && activeModal === "account" && (
         <div className="fixed inset-0 z-[2000] bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-6 text-slate-800 font-sans">
           <div className="bg-white w-full max-w-sm rounded-[56px] p-10 shadow-2xl animate-fade-in text-center">
             <h3 className="font-black text-xl mb-8 uppercase tracking-tighter">
@@ -1107,7 +1626,7 @@ export default function App() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
@@ -1130,7 +1649,7 @@ const SleepPlayerModal = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[2500] bg-slate-950 animate-fade-in overflow-hidden font-sans select-none">
+    <div className="fixed inset-0 z-[2500] animate-fade-in overflow-hidden bg-slate-950 font-sans select-none">
       <div className="absolute inset-0 bg-gradient-to-b from-[#0a0a1a] via-[#1a1a3a] to-[#2a1a4a]" />
       <StarField count={40} />
 
@@ -1227,45 +1746,53 @@ const SleepPlayerModal = ({
           </p>
         </div>
 
-        <div className="h-24 border-t border-white/5 bg-slate-950/50 backdrop-blur-md flex items-center justify-around px-8 pb-4">
+        <nav
+          className="flex shrink-0 items-center justify-around border-t border-white/10 bg-slate-950/80 px-2 py-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 font-black text-white/30 backdrop-blur-md sm:px-4"
+          aria-label="Main"
+        >
           <button
             type="button"
             onClick={openLibrary}
-            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="archive"
+            className="flex min-w-0 flex-col items-center gap-0.5 transition-colors"
           >
-            <Book size={24} />
-            <span className="text-[9px] font-black mt-1 uppercase">ARCHIVE</span>
+            <Book size={22} strokeWidth={2} />
+            <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+              Archive
+            </span>
           </button>
           <button
             type="button"
             onClick={() => setActiveModal("sleep")}
-            className="flex flex-col items-center text-indigo-400"
-            aria-label="sleep"
+            className="flex min-w-0 flex-col items-center gap-0.5 text-indigo-400 transition-colors"
           >
-            <Sparkles size={24} />
-            <span className="text-[9px] font-black mt-1 uppercase">SLEEP</span>
-            <div className="w-4 h-1 bg-indigo-400 rounded-full mt-1" />
+            <Sparkles size={22} strokeWidth={2} />
+            <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+              Sleep
+            </span>
           </button>
           <button
             type="button"
             onClick={openMemo}
-            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="send"
+            className="flex min-w-0 flex-col items-center gap-0.5 text-indigo-300 transition-all"
           >
-            <Send size={24} />
-            <span className="text-[9px] font-black mt-1 uppercase">Send</span>
+            <div className="rounded-full border-2 border-white/20 bg-indigo-500 p-2 shadow-[0_0_16px_rgba(99,102,241,0.45)] transition-all active:scale-90 sm:p-2.5">
+              <Send size={24} className="text-white sm:h-[26px] sm:w-[26px]" />
+            </div>
+            <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+              Send
+            </span>
           </button>
           <button
             type="button"
             onClick={openStore}
-            className="flex flex-col items-center opacity-30 hover:opacity-80 transition-opacity"
-            aria-label="shop"
+            className="flex min-w-0 flex-col items-center gap-0.5 transition-colors"
           >
-            <Gift size={24} />
-            <span className="text-[9px] font-black mt-1 uppercase">SHOP</span>
+            <Gift size={22} strokeWidth={2} />
+            <span className="text-[8px] uppercase leading-none tracking-widest sm:text-[9px]">
+              Shop
+            </span>
           </button>
-        </div>
+        </nav>
       </div>
     </div>
   );
