@@ -11,6 +11,7 @@ import {
   arrayUnion,
   deleteDoc,
   doc,
+  getDoc,
   getFirestore,
   onSnapshot,
   setDoc,
@@ -277,6 +278,7 @@ export default function App() {
   const [memoPhoto, setMemoPhoto] = useState(null);
   const [memoPrivacy, setMemoPrivacy] = useState("public");
   const [isSavingMemo, setIsSavingMemo] = useState(false);
+  const [altitudeDelta, setAltitudeDelta] = useState(null);
   const [libraryTab, setLibraryTab] = useState("all");
   const [storyPage, setStoryPage] = useState(0);
   const [isCapturing, setIsCapturing] = useState(false);
@@ -292,6 +294,7 @@ export default function App() {
   const audioRef = useRef(null);
   const sleepTimerRef = useRef(null);
   const fileInputRef = useRef(null);
+  const lastBalloonsRef = useRef(data.balloons || 0);
 
   useEffect(() => {
     if (DESIGN_MODE) return;
@@ -303,7 +306,9 @@ export default function App() {
         setUser(u);
         const userDocRef = doc(db, "artifacts", appId, "users", u.uid);
 
-        await setDoc(userDocRef, defaultData, { merge: true });
+        // Create doc only for new users (avoid overwriting isSetupComplete)
+        const existing = await getDoc(userDocRef);
+        if (!existing.exists()) await setDoc(userDocRef, defaultData);
 
         unsubscribeDoc = onSnapshot(userDocRef, (snap) => {
           if (!snap.exists()) return;
@@ -325,6 +330,16 @@ export default function App() {
       if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    const prev = lastBalloonsRef.current;
+    const next = data.balloons || 0;
+    if (next > prev) {
+      setAltitudeDelta((next - prev) * 100);
+      setTimeout(() => setAltitudeDelta(null), 1400);
+    }
+    lastBalloonsRef.current = next;
+  }, [data.balloons]);
 
   const handlePlayPause = async () => {
     if (!audioRef.current) return;
@@ -398,7 +413,7 @@ export default function App() {
       setNewMemo("");
       setMemoPhoto(null);
       setMemoPrivacy("public");
-      setActiveModal(null);
+      setActiveModal("memo");
     } catch {
       alert("오류가 발생했습니다. 파이어베이스 설정을 확인해 주세요.");
     } finally {
@@ -677,11 +692,21 @@ export default function App() {
       <div ref={gardenRef} className="relative flex-1 select-none">
         {!isCapturing && (
           <div className="absolute top-10 left-6 right-6 flex justify-between items-start z-50">
-            <div className="bg-white/20 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/30 shadow-lg flex items-center gap-2">
-              <Globe size={14} />
-              <span className="text-[13px] font-black uppercase tracking-tight">
-                {data.catConfig.name}
-              </span>
+            <div className="relative">
+              <div className="bg-white/20 backdrop-blur-md px-5 py-2.5 rounded-full border border-white/30 shadow-lg flex items-center gap-2">
+                <Globe size={14} />
+                <span className="text-[13px] font-black uppercase tracking-tight">
+                  {data.catConfig.name}
+                </span>
+                <span className="text-[11px] font-black text-white/70 tracking-tight">
+                  {(data.balloons || 0) * 100}m
+                </span>
+              </div>
+              {altitudeDelta ? (
+                <div className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-[11px] font-black text-white bg-indigo-500/80 border border-white/20 px-3 py-1.5 rounded-full shadow-lg animate-slide-up">
+                  +{altitudeDelta}m
+                </div>
+              ) : null}
             </div>
             <div className="flex gap-2">
               <button
@@ -718,6 +743,9 @@ export default function App() {
           </div>
           <div className="absolute -left-2 -bottom-6 text-[9px] font-black uppercase tracking-tighter opacity-50">
             49D Journey
+          </div>
+          <div className="absolute -left-1 top-[-22px] text-[10px] font-black tracking-tight text-white/50">
+            {(data.balloons || 0) * 100}m
           </div>
         </div>
 
