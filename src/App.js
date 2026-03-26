@@ -5,6 +5,7 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import { getApp, getApps, initializeApp } from "firebase/app";
 import {
   deleteUser,
@@ -355,7 +356,8 @@ export default function App() {
     src: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3",
   });
 
-  const gardenRef = useRef(null);
+  /** 스카이·배경·헤더·고양이·하단까지 포함한 캡처 영역 */
+  const sceneCaptureRef = useRef(null);
   const audioRef = useRef(null);
   const purrAudioRef = useRef(null);
   const patAudioRef = useRef(null);
@@ -630,20 +632,70 @@ export default function App() {
   };
 
   const handleCapture = async () => {
-    if (!gardenRef.current) return;
-    setIsCapturing(true);
+    if (!sceneCaptureRef.current) return;
+    flushSync(() => {
+      setIsCapturing(true);
+    });
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(resolve));
+    });
     setTimeout(async () => {
-      const canvas = await html2canvas(gardenRef.current, {
-        useCORS: true,
-        scale: 2,
-        backgroundColor: null,
-      });
-      const link = document.createElement("a");
-      link.download = `RainbowGarden_${data.catConfig.name || "cat"}.png`;
-      link.href = canvas.toDataURL("image/png");
-      link.click();
-      setIsCapturing(false);
-    }, 200);
+      try {
+        const el = sceneCaptureRef.current;
+        if (!el) {
+          setIsCapturing(false);
+          return;
+        }
+        const canvas = await html2canvas(el, {
+          useCORS: true,
+          allowTaint: true,
+          scale: 2,
+          backgroundColor: null,
+          logging: false,
+          scrollX: 0,
+          scrollY: -window.scrollY,
+          ignoreElements: (node) => {
+            if (!node || node.nodeType !== 1) return false;
+            if (typeof node.closest === "function") {
+              return Boolean(node.closest("[data-capture-exclude]"));
+            }
+            return false;
+          },
+          onclone: (_doc, cloned) => {
+            const origLayers = el.querySelectorAll("[data-capture-sky-layer]");
+            const cloneLayers = cloned.querySelectorAll("[data-capture-sky-layer]");
+            origLayers.forEach((orig, i) => {
+              const c = cloneLayers[i];
+              if (!c) return;
+              const cs = window.getComputedStyle(orig);
+              c.style.background = cs.background;
+              c.style.backgroundImage = cs.backgroundImage;
+              c.style.backgroundSize = cs.backgroundSize;
+              c.style.backgroundPosition = cs.backgroundPosition;
+              c.style.backgroundRepeat = cs.backgroundRepeat;
+              c.style.backgroundClip = cs.backgroundClip;
+              c.style.opacity = cs.opacity;
+            });
+            const h = el.offsetHeight;
+            const w = el.offsetWidth;
+            cloned.style.boxSizing = "border-box";
+            cloned.style.minHeight = `${h}px`;
+            cloned.style.height = `${h}px`;
+            cloned.style.width = `${w}px`;
+          },
+        });
+        const link = document.createElement("a");
+        link.download = `RainbowGarden_${data.catConfig.name || "cat"}.png`;
+        link.href = canvas.toDataURL("image/png");
+        link.click();
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error(e);
+        alert("이미지를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+      } finally {
+        setIsCapturing(false);
+      }
+    }, 80);
   };
 
   const handleDeleteAll = async () => {
@@ -884,8 +936,28 @@ export default function App() {
     {step >= 2 && (
     <div className="tamago-frame flex h-[100svh] max-h-[100dvh] min-h-0 w-full flex-col overflow-hidden bg-[#0c0618] text-white">
       <style>{styleTag}</style>
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1.05rem]">
+      <audio ref={audioRef} src={selectedTrack.src} loop />
+      <audio
+        ref={purrAudioRef}
+        src="/purr-song.mp3"
+        loop
+        preload="auto"
+        className="sr-only"
+        aria-hidden
+      />
+      <audio
+        ref={patAudioRef}
+        src="/cat-pat.mp3"
+        preload="auto"
+        className="sr-only"
+        aria-hidden
+      />
+      <div
+        ref={sceneCaptureRef}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[1.05rem]"
+      >
         <div
+          data-capture-sky-layer
           className={`relative flex min-h-0 flex-1 flex-col overflow-hidden [--header-stack:clamp(4.65rem,10.5vh,5.85rem)] ${
             useDay1to3SkyImage ? "bg-slate-950" : `bg-gradient-to-b ${skyStyle}`
           }`}
@@ -894,6 +966,7 @@ export default function App() {
         <>
           <div
             aria-hidden
+            data-capture-sky-layer
             className="absolute inset-0 z-0 min-h-full min-w-full bg-no-repeat"
             style={{
               backgroundImage: "url(/bg-day1-3.png)",
@@ -902,38 +975,26 @@ export default function App() {
               backgroundRepeat: "no-repeat",
             }}
           />
-          <div className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-black/15 via-transparent to-black/25" />
+          <div
+            data-capture-sky-layer
+            className="pointer-events-none absolute inset-0 z-[1] bg-gradient-to-b from-black/15 via-transparent to-black/25"
+          />
         </>
       ) : (
         <div
           aria-hidden
+          data-capture-sky-layer
           className={`pointer-events-none absolute inset-0 z-0 min-h-full w-full bg-gradient-to-b ${skyStyle}`}
         />
       )}
-      <audio ref={audioRef} src={selectedTrack.src} loop />
-      <audio
-        ref={purrAudioRef}
-        src="/purring-cat.mp3"
-        loop
-        preload="auto"
-        className="hidden"
-        aria-hidden
-      />
-      <audio
-        ref={patAudioRef}
-        src="/cat-pat.mp3"
-        preload="auto"
-        className="hidden"
-        aria-hidden
-      />
 
-      <div
-        ref={gardenRef}
-        className="relative z-[2] flex min-h-0 flex-1 flex-col overflow-hidden select-none"
-      >
+      <div className="relative z-[2] flex min-h-0 flex-1 flex-col overflow-hidden select-none">
         {!isCapturing && (
           <>
-            <div className="z-50 flex shrink-0 justify-between gap-2 px-3 pt-2.5 sm:px-5 sm:pt-3">
+            <div
+              data-html2canvas-ignore
+              className="z-50 flex shrink-0 justify-between gap-2 px-3 pt-2.5 sm:px-5 sm:pt-3"
+            >
               <div className="relative flex min-w-0 flex-1 flex-wrap items-center gap-2">
                 <div className="flex min-w-0 max-w-full items-center gap-2 rounded-full border border-white/30 bg-white/20 px-4 py-2.5 shadow-lg backdrop-blur-md">
                   <Globe size={14} className="shrink-0" />
@@ -981,7 +1042,10 @@ export default function App() {
                 </button>
               </div>
             </div>
-            <div className="flex shrink-0 justify-center gap-2 px-3 pb-1 pt-0">
+            <div
+              data-html2canvas-ignore
+              className="flex shrink-0 justify-center gap-2 px-3 pb-1 pt-0"
+            >
               <button
                 type="button"
                 onClick={() => setActiveModal("store")}
@@ -1007,9 +1071,12 @@ export default function App() {
           </>
         )}
 
+        {!isCapturing ? (
         <div
+          data-html2canvas-ignore
           className="absolute left-4 top-[var(--header-stack)] bottom-[min(24vh,6.25rem)] w-1 rounded-full bg-white/10 sm:left-5 flex flex-col items-center"
           aria-hidden
+          data-capture-exclude
         >
           <div
             className="absolute bottom-0 w-full bg-indigo-400 transition-all duration-1000"
@@ -1024,6 +1091,7 @@ export default function App() {
             {(data.balloons || 0) * 100}m
           </div>
         </div>
+        ) : null}
 
         <div className="rg-main-stage relative w-full overflow-hidden">
           <div className="absolute inset-0 flex min-h-0 flex-col items-center justify-center px-2 pb-1 pt-0 sm:px-3">
@@ -1061,10 +1129,14 @@ export default function App() {
               height: "clamp(4.25rem, 26vw, 7.5rem)",
             }}
           >
-            {meowBubbleVisible && !isCatPurring && !isPatPatAnimating ? (
+            {meowBubbleVisible &&
+            !isCatPurring &&
+            !isPatPatAnimating &&
+            !isCapturing ? (
               <div
                 className="cat-meow-bubble pointer-events-none absolute -top-[3.35rem] left-1/2 z-20 w-max max-w-[min(14rem,calc(100vw-2rem))]"
                 role="status"
+                data-capture-exclude
               >
                 <div className="relative rounded-2xl border border-white/25 bg-white px-3.5 py-2.5 pr-4 text-left shadow-xl">
                   <p className="text-[13px] font-black leading-tight text-slate-800">
@@ -1080,28 +1152,31 @@ export default function App() {
                 </div>
               </div>
             ) : null}
-            {isCatPurring && !isPatPatAnimating ? (
+            {isCatPurring && !isPatPatAnimating && !isCapturing ? (
               <div
                 className="cat-zzzz-text pointer-events-none absolute -top-9 left-1/2 z-30 -translate-x-1/2 select-none text-lg font-black tracking-[0.2em] text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)] sm:-top-10 sm:text-xl"
                 aria-hidden
+                data-capture-exclude
               >
                 Zzzz
               </div>
             ) : null}
-            {isPatPatAnimating ? (
+            {isPatPatAnimating && !isCapturing ? (
               <div
                 className="cat-pat-text-pop pointer-events-none absolute -top-10 left-1/2 z-35 -translate-x-1/2 select-none text-base font-black tracking-wide text-amber-100 drop-shadow-[0_2px_10px_rgba(0,0,0,0.65)] sm:-top-11 sm:text-lg"
                 role="status"
+                data-capture-exclude
               >
                 Pat! Pat!
               </div>
             ) : null}
-            {!catHintDismissed ? (
+            {!catHintDismissed && !isCapturing ? (
               <div
                 className={`cat-hint-bubble pointer-events-none absolute -top-2 left-1/2 z-[15] w-[min(13.5rem,calc(100vw-3rem))] -translate-x-1/2 transition-opacity duration-500 ease-out sm:-top-3 ${
                   catHintFading ? "cat-hint-bubble--dismissed" : ""
                 }`}
                 aria-hidden
+                data-capture-exclude
               >
                 <div className="relative rounded-2xl border border-white/20 bg-white/[0.12] px-3.5 py-2.5 shadow-[0_4px_24px_rgba(0,0,0,0.12)] backdrop-blur-md">
                   <div className="relative flex min-h-[2.4rem] w-full items-center justify-center sm:min-h-[2.55rem]">
@@ -1247,8 +1322,12 @@ export default function App() {
               </div>
             </div>
           </div>
-          {(data.balloons || 0) === 0 ? (
-            <div className="mt-3 max-w-[18rem] shrink-0 rounded-2xl bg-white/10 px-4 py-2 text-center text-[11px] font-bold animate-pulse backdrop-blur-sm">
+          {(data.balloons || 0) === 0 && !isCapturing ? (
+            <div
+              data-html2canvas-ignore
+              className="mt-3 max-w-[18rem] shrink-0 rounded-2xl bg-white/10 px-4 py-2 text-center text-[11px] font-bold animate-pulse backdrop-blur-sm"
+              data-capture-exclude
+            >
               풍선을 보내면 여정이 시작됩니다
             </div>
           ) : null}
@@ -1256,8 +1335,12 @@ export default function App() {
         </div>
       </div>
 
-      {activeModal === null ? (
-        <div className="relative z-[90] shrink-0 border-t border-white/10 bg-[#0a0a1a]/90 px-2 pb-2 pt-2 backdrop-blur-md sm:px-3">
+      {activeModal === null && !isCapturing ? (
+        <div
+          data-html2canvas-ignore
+          className="relative z-[90] shrink-0 border-t border-white/10 bg-[#0a0a1a]/90 px-2 pb-2 pt-2 backdrop-blur-md sm:px-3"
+          data-capture-exclude
+        >
           <SendButton
             onClick={() => setActiveModal("memo")}
             variant="dreamy"
@@ -1265,9 +1348,12 @@ export default function App() {
         </div>
       ) : null}
 
+      {!isCapturing ? (
       <nav
+        data-html2canvas-ignore
         className="z-[100] flex shrink-0 items-center justify-around border-t border-white/5 bg-[#0a0a1a] px-2 py-1 pb-[max(0.25rem,env(safe-area-inset-bottom))] pt-1 font-black text-white/30 sm:px-4"
         aria-label="Main"
+        data-capture-exclude
       >
         <button
           onClick={() => {
@@ -1329,6 +1415,7 @@ export default function App() {
           </span>
         </button>
       </nav>
+      ) : null}
         </div>
       </div>
     </div>
